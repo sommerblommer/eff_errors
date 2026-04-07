@@ -27,14 +27,14 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
     val input =
       """
         |def f () : Unit \ {} = {
-        |    println("42")
+        |   IO.println("42")
         |}
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
+        |eff IO {
+        |   def println(x: String): Unit
+        |}
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ExplicitlyPureFunctionUsesIO](result)
+    expectOneError[TypeError.ExplicitlyPureFunctionUsesIO](result)
   }
 
   test("Test.ExplicitlyPureUsingIO.02") {
@@ -54,12 +54,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |}
         |def main(): Unit \ IO =
         |   println(area(Shape.Rectangle(2, 4)))
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ExplicitlyPureFunctionUsesIO](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ExplicitlyPureFunctionUsesIO](result)
   }
 
   test("Test.ExplicitlyPureFunctionUsesIO.03") {
@@ -71,14 +68,11 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |instance Bar[Int32] {
         |    pub def bar(x: Int32): Unit \ {} = println(x)
         |}
-        |def foo(): Unit \ IO =
+        |def foo(): Unit =
         |    Bar.bar(42)
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ExplicitlyPureFunctionUsesIO](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ExplicitlyPureFunctionUsesIO](result)
   }
 
   test("Test.ExplicitlyPureFunctionUsesIO.04") {
@@ -92,12 +86,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |}
         |def foo(): Unit \ {} =
         |    Bar.bar(42)
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ExplicitlyPureFunctionUsesIO](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ExplicitlyPureFunctionUsesIO](result)
   }
 
   test("Test.ExplicitlyPureFunctionUsesIO.05") {
@@ -105,12 +96,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
       """
         |def a(): Unit \ IO = println(42)
         |def b(): Unit \ {} = a()
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ExplicitlyPureFunctionUsesIO](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ExplicitlyPureFunctionUsesIO](result)
   }
 
   test("Test.ExplicitlyPureFunctionUsesIO.06") {
@@ -118,12 +106,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
       """
         |def f(h: Unit -> Unit \ {}): Unit \ {}  =
         |    h(println(""))
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ExplicitlyPureFunctionUsesIO](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ExplicitlyPureFunctionUsesIO](result)
   }
 
   test("Test.ImplicitlyPureFunctionUsesIO.01") {
@@ -132,12 +117,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |def f () : Unit = {
         |    println("42")
         |}
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
       """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ImplicitlyPureFunctionUsesIO](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ImplicitlyPureFunctionUsesIO](result)
   }
 
   test("Test.ImplicitlyPureFunctionUsesIO.02") {
@@ -157,12 +139,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |}
         |def main(): Unit \ IO =
         |   println(area(Shape.Rectangle(2, 4)))
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ImplicitlyPureFunctionUsesIO](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ImplicitlyPureFunctionUsesIO](result)
   }
 
   test("Test.ImplicitlyPureFunctionUsesIO.03") {
@@ -174,14 +153,11 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |instance Bar[Int32] {
         |    pub def bar(x: Int32): Unit = println(x)
         |}
-        |def foo(): Unit \ IO =
+        |def foo(): Unit =
         |    Bar.bar(42)
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ImplicitlyPureFunctionUsesIO](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ImplicitlyPureFunctionUsesIO](result)
   }
 
   test("Test.ImplicitlyPureFunctionUsesIO.04") {
@@ -195,12 +171,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |}
         |def foo(): Unit =
         |    Bar.bar(42)
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ImplicitlyPureFunctionUsesIO](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ImplicitlyPureFunctionUsesIO](result)
   }
 
   test("Test.ImplicitlyPureFunctionUsesIO.05") {
@@ -208,12 +181,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
       """
         |def a(): Unit \ IO = println(42)
         |def b(): Unit = a()
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ImplicitlyPureFunctionUsesIO](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ImplicitlyPureFunctionUsesIO](result)
   }
 
   test("Test.ExplicitlyPureFunctionUsesEffect.01") {
@@ -226,7 +196,7 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |}
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ExplicitlyPureFunctionUsesEffect](result)
+    expectOneError[TypeError.ExplicitlyPureFunctionUsesEffect](result)
   }
 
   test("Test.ExplicitlyPureFunctionUsesEffect.02") {
@@ -249,12 +219,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |eff Bar {
         |    def buzz(): Unit
         |}
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ExplicitlyPureFunctionUsesEffect](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ExplicitlyPureFunctionUsesEffect](result)
   }
 
   test("Test.ExplicitlyPureUsingEffect.03") {
@@ -267,7 +234,7 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |}
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ExplicitlyPureFunctionUsesEffect](result)
+    expectOneError[TypeError.ExplicitlyPureFunctionUsesEffect](result)
   }
 
   test("Test.ExplicitlyPureFunctionUsesEffect.04") {
@@ -278,7 +245,7 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |    m()
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ExplicitlyPureFunctionUsesEffect](result)
+    expectOneError[TypeError.ExplicitlyPureFunctionUsesEffect](result)
   }
 
   test("Test.ImplicitlyPureFunctionUsesEffect.01") {
@@ -291,7 +258,7 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |}
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ImplicitlyPureFunctionUsesEffect](result)
+    expectOneError[TypeError.ImplicitlyPureFunctionUsesEffect](result)
   }
 
   test("Test.ImplicitlyPureFunctionUsesEffect.02") {
@@ -314,12 +281,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |eff Bar {
         |    def buzz(): Unit
         |}
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ImplicitlyPureFunctionUsesEffect](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ImplicitlyPureFunctionUsesEffect](result)
   }
 
   test("Test.ImplicitlyPureFunctionUsesEffect.03") {
@@ -332,7 +296,7 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |}
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ImplicitlyPureFunctionUsesEffect](result)
+    expectOneError[TypeError.ImplicitlyPureFunctionUsesEffect](result)
   }
 
   test("Test.EffectfulFunctionUsesOtherEffect.01") {
@@ -341,59 +305,55 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |def foo(f: Unit -> Unit \ ef1, g: Unit -> Unit \ ef2): Unit \ ef1 = f(); g()
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.EffectfulFunctionUsesOtherEffect](result)
+    expectOneError[TypeError.EffectfulFunctionUsesOtherEffect](result)
   }
 
   test("Test.EffectfulFunctionUsesOtherEffect.02") {
     val input =
       """
-        |def foo(_: Unit -> Unit \ ef1): Unit \ ef1 = Bar.buzz()
+        |def foo(f: Unit -> Unit \ ef1): Unit \ ef1 = f(); Bar.buzz()
         |eff Bar {
         |  def buzz(): Unit
         |}
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.EffectfulFunctionUsesOtherEffect](result)
+    expectOneError[TypeError.EffectfulFunctionUsesOtherEffect](result)
   }
 
   test("Test.EffectfulFunctionUsesOtherEffect.03") {
     val input =
       """
-        |def foo(_: Unit -> Unit \ ef1): Unit \ ef1 = println("42")
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
+        |def foo(f: Unit -> Unit \ ef1): Unit \ ef1 = f(); println("42")
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.EffectfulFunctionUsesOtherEffect](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.EffectfulFunctionUsesOtherEffect](result)
   }
 
   test("Test.EffectfulFunctionUsesOtherEffect.04") {
     val input =
       """
-        |def foo(): Unit \ Foo = Bar.buzz()
-        |eff Foo
+        |def foo(): Unit \ Foo = Foo.f(); Bar.buzz()
+        |eff Foo {
+        |   def f(): Unit
+        |}
         |eff Bar {
-        |  def buzz(): Unit
+        |   def buzz(): Unit
         |}
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.EffectfulFunctionUsesOtherEffect](result)
+    expectOneError[TypeError.EffectfulFunctionUsesOtherEffect](result)
   }
 
   test("Test.EffectfulFunctionUsesOtherEffect.05") {
     val input =
       """
-        |def foo(): Unit \ IO = Bar.buzz()
+        |def foo(): Unit \ IO = println("42"); Bar.buzz()
         |eff Bar {
         |  def buzz(): Unit
         |}
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.EffectfulFunctionUsesOtherEffect](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.EffectfulFunctionUsesOtherEffect](result)
   }
 
   test("Test.EffectfulFunctionUsesOtherEffect.06") {
@@ -407,6 +367,7 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |def area(s: Shape): Int32 \ IO = match s {
         |   case Shape.Circle(r)       => 3 * (r * r)
         |   case Shape.Square(w)       =>
+        |       println("42");
         |       Bar.buzz();
         |       w * w
         |   case Shape.Rectangle(h, w) => h * w
@@ -416,41 +377,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |eff Bar {
         |    def buzz(): Unit
         |}
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.EffectfulFunctionUsesOtherEffect](result)
-  }
-
-  test("Test.EffectfulFunctionUsesOtherEffect.07") {
-    val input =
-      """
-        |enum Shape {
-        |   case Circle(Int32),
-        |   case Square(Int32),
-        |   case Rectangle(Int32, Int32)
-        |}
-        |def area(s: Shape): Int32 \ Bar = match s {
-        |   case Shape.Circle(r)       => 3 * (r * r)
-        |   case Shape.Square(w)       =>
-        |       println(w);
-        |       w * w
-        |   case Shape.Rectangle(h, w) => h * w
-        |}
-        |def main(): Unit \ Bar =
-        |   let _ = area(Shape.Rectangle(2, 4));
-        |   ()
-        |eff Bar {
-        | def buzz(): Unit
-        |}
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
-        """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.EffectfulFunctionUsesOtherEffect](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.EffectfulFunctionUsesOtherEffect](result)
   }
 
   test("Test.EffectfulFunctionUsesOtherEffect.08") {
@@ -467,12 +396,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |eff Bar {
         |    def baz(): Unit
         |}
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.EffectfulFunctionUsesOtherEffect](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.EffectfulFunctionUsesOtherEffect](result)
   }
 
   test("Test.UnusedEffectInSignature.01") {
@@ -484,19 +410,16 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |eff Bar {
         |    def baz(): Unit
         |}
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.UnusedEffectInSignature](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.UnusedEffectInSignature](result)
   }
 
   test("Test.UnusedEffectInSignature.02") {
     val input =
       """
         |def foo(): Unit \ {Bar, Baz} =
-        |    ()
+        |    Bar.op1()
         |
         |eff Bar {
         |    def op1(): Unit
@@ -507,7 +430,7 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |}
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.UnusedEffectInSignature](result)
+    expectOneError[TypeError.UnusedEffectInSignature](result)
   }
 
   test("Test.UnusedEffectInSignature.03") {
@@ -521,7 +444,7 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |}
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.UnusedEffectInSignature](result)
+    expectOneError[TypeError.UnusedEffectInSignature](result)
   }
 
   test("Test.ArgumentGivenWrongEffect.01") {
@@ -534,12 +457,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |    let f = () -> println("€");
         |    hof1(f);
         |    hof2(f)
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ArgumentGivenWrongEffect](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ArgumentGivenWrongEffect](result)
   }
 
   test("Test.ArgumentGivenWrongEffect.02") {
@@ -557,7 +477,7 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |}
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ArgumentGivenWrongEffect](result)
+    expectOneError[TypeError.ArgumentGivenWrongEffect](result)
   }
 
   test("Test.ArgumentGivenWrongEffect.03") {
@@ -571,7 +491,7 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |    p(f >> g)
         """.stripMargin
     val result = check(input, Options.TestWithLibMin)
-    expectError[TypeError.ArgumentGivenWrongEffect](result)
+    expectOneError[TypeError.ArgumentGivenWrongEffect](result)
   }
 
   test("Test.ArgumentGivenWrongEffect.04") {
@@ -587,12 +507,9 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |eff Bar {
         |    def baz(): Unit
         |}
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ArgumentGivenWrongEffect](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ArgumentGivenWrongEffect](result)
   }
 
   test("Test.ArgumentGivenWrongEffect.05") {
@@ -602,18 +519,16 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |def hof2(f: Unit -> Unit \ ef): Unit \ ef = f()
         |
         |def foo(): Unit \ IO + Bar =
+        |    Bar.baz();
         |    let f = () -> ();
         |    hof1(f);
         |    hof2(f)
         |eff Bar {
         |    def baz(): Unit
         |}
-        |eff IO
-        |pub def println(x: String): Unit \ IO =
-        |    System.out.println(x)
         """.stripMargin
-    val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ArgumentGivenWrongEffect](result)
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.ArgumentGivenWrongEffect](result)
   }
 
   test("Test.ArgumentGivenWrongEffect.06") {
@@ -625,7 +540,7 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |    p(h)
       """.stripMargin
     val result = check(input, Options.TestWithLibNix)
-    expectError[TypeError.ArgumentGivenWrongEffect](result)
+    expectOneError[TypeError.ArgumentGivenWrongEffect](result)
   }
 
   test("Test.ArgumentGivenWrongEffect.07") {
@@ -641,7 +556,6 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
         |   case Shape.Circle(_) => g()
         |   case _ => h()
         |}
-        |
         |def foo(): Unit \ IO =
         |    let p = println;
         |    let q = x -> x;
