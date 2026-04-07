@@ -46,16 +46,19 @@ object Resolver {
 
   /**
     * The set of cases that are used by default in the namespace.
+    *
+    * NB: Ordinal is -1 because these are lookup keys used only for namespace/name resolution,
+    * never compared for equality with real CaseSyms.
     */
   private val DefaultCases = Map(
-    "Nil" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "List", SourceLocation.Unknown), "Nil", SourceLocation.Unknown),
-    "Cons" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "List", SourceLocation.Unknown), "Cons", SourceLocation.Unknown),
+    "Nil" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "List", SourceLocation.Unknown), "Nil", -1, SourceLocation.Unknown),
+    "Cons" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "List", SourceLocation.Unknown), "Cons", -1, SourceLocation.Unknown),
 
-    "None" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "Option", SourceLocation.Unknown), "None", SourceLocation.Unknown),
-    "Some" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "Option", SourceLocation.Unknown), "Some", SourceLocation.Unknown),
+    "None" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "Option", SourceLocation.Unknown), "None", -1, SourceLocation.Unknown),
+    "Some" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "Option", SourceLocation.Unknown), "Some", -1, SourceLocation.Unknown),
 
-    "Err" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "Result", SourceLocation.Unknown), "Err", SourceLocation.Unknown),
-    "Ok" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "Result", SourceLocation.Unknown), "Ok", SourceLocation.Unknown)
+    "Err" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "Result", SourceLocation.Unknown), "Err", -1, SourceLocation.Unknown),
+    "Ok" -> new Symbol.CaseSym(new Symbol.EnumSym(None, Nil, "Result", SourceLocation.Unknown), "Ok", -1, SourceLocation.Unknown)
   )
 
   /**
@@ -253,6 +256,7 @@ object Resolver {
     case UnkindedType.Ascribe(tpe, _, _) => getAliasUses(tpe)
     case UnkindedType.UnappliedAlias(sym, _) => sym :: Nil
     case _: UnkindedType.UnappliedAssocType => Nil
+    case _: UnkindedType.UnappliedNative => Nil
     case _: UnkindedType.Cst => Nil
     case UnkindedType.Apply(tpe1, tpe2, _) => getAliasUses(tpe1) ::: getAliasUses(tpe2)
     case _: UnkindedType.Arrow => Nil
@@ -1197,7 +1201,7 @@ object Resolver {
       val es = exps.map(resolveExp(_, scp0))
       scp0.superClass match {
         case Some(clazz) =>
-          ResolvedAst.Expr.InvokeSuperMethod(clazz, methodName, es, loc)
+          ResolvedAst.Expr.InvokeSuperMethod(clazz, methodName, es, scp0.superTargs, loc)
         case None =>
           val error = ResolutionError.IllegalSuperCall(loc)
           sctx.errors.add(error)
@@ -1209,18 +1213,17 @@ object Resolver {
       ResolvedAst.Expr.GetField(e, name, loc)
 
     case NamedAst.Expr.NewObject(name, tpe, constructors, methods, loc) =>
+      //
+      // Fully resolve the type and extract the native class and type arguments.
+      //
       val t = resolveType(tpe, Some(Kind.Star), Wildness.ForbidWild, scp0, taenv, ns0, root)
-      //
-      // Extract the native class from the erased type. We erase type aliases first
-      // because the type may be wrapped in an alias (e.g., `type JList = ##java.util.ArrayList`),
-      // and we need to look through that to find the underlying `Native` type constructor.
-      //
       getNativeClassFromType(UnkindedType.eraseAliases(t)) match {
         case Some(clazz) =>
-          val superScp = scp0.withSuperClass(Some(clazz))
+          val targs = UnkindedType.eraseAliases(t).typeArguments
+          val superScp = scp0.withSuperClass(Some(clazz)).withSuperTargs(targs)
           val cs = constructors.map(visitJvmConstructor(_, superScp))
           val ms = methods.map(visitJvmMethod(_, superScp))
-          ResolvedAst.Expr.NewObject(name, clazz, cs, ms, loc)
+          ResolvedAst.Expr.NewObject(name, clazz, targs, cs, ms, loc)
         case None =>
           val cs = constructors.map(visitJvmConstructor(_, scp0))
           val ms = methods.map(visitJvmMethod(_, scp0))
@@ -2513,6 +2516,17 @@ object Resolver {
             }
         }
 
+      case UnkindedType.UnappliedNative(clazz, loc) =>
+        val expectedArity = clazz.getTypeParameters.length
+        if (targs.length < expectedArity) {
+          sctx.errors.add(ResolutionError.IllegalRawJavaType(clazz, expectedArity, loc))
+          UnkindedType.Error(loc)
+        } else {
+          val cst = UnkindedType.Cst(TypeConstructor.Native(clazz), loc)
+          val resolvedArgs = targs.map(finishResolveType(_, taenv))
+          UnkindedType.mkApply(cst, resolvedArgs, tpe0.loc)
+        }
+
       case _: UnkindedType.Var =>
         UnkindedType.mkApply(baseType, targs.map(finishResolveType(_, taenv)), tpe0.loc)
 
@@ -3356,6 +3370,7 @@ object Resolver {
     */
   private def getNativeClassFromType(tpe: UnkindedType): Option[Class[?]] = tpe match {
     case UnkindedType.Cst(TypeConstructor.Native(clazz), _) => Some(clazz)
+    case UnkindedType.UnappliedNative(clazz, _) => Some(clazz)
     case UnkindedType.Apply(t1, _, _) => getNativeClassFromType(t1)
     case _ => None
   }
@@ -3383,7 +3398,7 @@ object Resolver {
     case "java.util.function.DoubleConsumer" => UnkindedType.mkIoArrow(UnkindedType.mkFloat64(loc), UnkindedType.mkUnit(loc), loc)
     case "java.util.function.DoublePredicate" => UnkindedType.mkIoArrow(UnkindedType.mkFloat64(loc), UnkindedType.mkBool(loc), loc)
     case "java.util.function.DoubleUnaryOperator" => UnkindedType.mkIoArrow(UnkindedType.mkFloat64(loc), UnkindedType.mkFloat64(loc), loc)
-    case _ => UnkindedType.Cst(TypeConstructor.Native(clazz), loc)
+    case _ => UnkindedType.UnappliedNative(clazz, loc)
   }
 
   /**
