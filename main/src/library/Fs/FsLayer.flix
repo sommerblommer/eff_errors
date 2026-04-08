@@ -21,6 +21,7 @@ mod Fs.FsLayer {
     import java.io.UncheckedIOException
     import java.lang.Class
     import java.lang.IllegalArgumentException
+    import java.lang.{Object => JObject}
     import java.lang.UnsupportedOperationException
     import java.nio.charset.CharacterCodingException
     import java.nio.charset.StandardCharsets
@@ -62,7 +63,7 @@ mod Fs.FsLayer {
     /// symbolic link itself rather than silently dereferencing to its target.
     ///
     def noFollow(): Vector[LinkOption] =
-        ...{LinkOption.NOFOLLOW_LINKS}
+        Vector#{LinkOption.NOFOLLOW_LINKS}
 
     // ─── Logging helpers ───────────────────────────────────────────────
 
@@ -256,24 +257,25 @@ mod Fs.FsLayer {
 
     pub def glob(base: String, pattern: String): Result[IoError, List[String]] \ IO =
         try {
-            region rc {
-                let basePath = Paths.get(base);
-                let matcher = FileSystems.getDefault().getPathMatcher("glob:${pattern}");
-                let stream = Files.walk(basePath, (...{}: Vector[FileVisitOption]));
-                let iter = Adaptor.fromStreamToIterator(rc, (Proxy.Proxy: Proxy[Path]), stream);
-                let result = iter
-                    |> Iterator.filterMap(path -> {
-                        let rel = basePath.relativize(path);
-                        if (matcher.matches(rel))
-                            Some(path.toString())
-                        else
-                            None
-                    })
-                    |> Iterator.toList;
-                let bs: BaseStream = checked_cast(stream);
-                bs.close();
-                Ok(result)
-            }
+            let basePath = Paths.get(base);
+            let matcher = FileSystems.getDefault().getPathMatcher("glob:${pattern}");
+            let stream = Files.walk(basePath);
+            let bs: BaseStream[Path, Stream[Path]] = checked_cast(stream);
+            let jiter = bs.iterator();
+            def loop(acc) = {
+                if (jiter.hasNext())
+                    let path = jiter.next();
+                    let rel = basePath.relativize(path);
+                    if (matcher.matches(rel))
+                        loop(path.toString() :: acc)
+                    else
+                        loop(acc)
+                else
+                    acc
+            };
+            let result = List.reverse(loop(Nil));
+            bs.close();
+            Ok(result)
         } catch {
             case ex: InvalidPathException     => Err(IoError(ErrorKind.InvalidPath, ex.getMessage()))
             case ex: IllegalArgumentException => Err(IoError(ErrorKind.InvalidInput, ex.getMessage()))
@@ -286,7 +288,7 @@ mod Fs.FsLayer {
     pub def write(data: {str = String}, f: String): Result[IoError, Unit] \ IO =
         try {
             let bytes = data#str.getBytes(StandardCharsets.UTF_8);
-            Files.write(Paths.get(f), bytes, (...{}: Vector[OpenOption]));
+            Files.write(Paths.get(f), bytes);
             Ok(())
         } catch {
             case ex: InvalidPathException          => Err(IoError(ErrorKind.InvalidPath, ex.getMessage()))
@@ -296,7 +298,7 @@ mod Fs.FsLayer {
 
     pub def writeLines(data: {lines = List[String]}, f: String): Result[IoError, Unit] \ IO =
         try {
-            let bf = Files.newBufferedWriter(Paths.get(f), (...{}: Vector[OpenOption]));
+            let bf = Files.newBufferedWriter(Paths.get(f));
             List.forEach(line -> {
                 bf.write(line, 0, String.length(line));
                 bf.newLine()
@@ -313,7 +315,7 @@ mod Fs.FsLayer {
         try {
             region rc {
                 let bytes = Vector.toArray(rc, data);
-                Files.write(Paths.get(f), bytes, (...{}: Vector[OpenOption]));
+                Files.write(Paths.get(f), bytes);
                 Ok(())
             }
         } catch {
@@ -327,7 +329,7 @@ mod Fs.FsLayer {
     pub def append(data: {str = String}, f: String): Result[IoError, Unit] \ IO =
         try {
             let bytes = data#str.getBytes(StandardCharsets.UTF_8);
-            let opts: Vector[OpenOption] = ...{
+            let opts: Vector[OpenOption] = Vector#{
                 checked_cast(StandardOpenOption.APPEND),
                 checked_cast(StandardOpenOption.CREATE)
             };
@@ -341,7 +343,7 @@ mod Fs.FsLayer {
 
     pub def appendLines(data: {lines = List[String]}, f: String): Result[IoError, Unit] \ IO =
         try {
-            let opts: Vector[OpenOption] = ...{
+            let opts: Vector[OpenOption] = Vector#{
                 checked_cast(StandardOpenOption.APPEND),
                 checked_cast(StandardOpenOption.CREATE)
             };
@@ -362,7 +364,7 @@ mod Fs.FsLayer {
         try {
             region rc {
                 let bytes = Vector.toArray(rc, data);
-                let opts: Vector[OpenOption] = ...{
+                let opts: Vector[OpenOption] = Vector#{
                     checked_cast(StandardOpenOption.APPEND),
                     checked_cast(StandardOpenOption.CREATE)
                 };
@@ -382,7 +384,7 @@ mod Fs.FsLayer {
             region rc {
                 let opt: OpenOption = checked_cast(StandardOpenOption.TRUNCATE_EXISTING);
                 let arr: Array[Int8, rc] = Array#{} @ rc;
-                Files.write(Paths.get(f), arr, ...{opt});
+                Files.write(Paths.get(f), arr, opt);
                 Ok(())
             }
         } catch {
@@ -449,7 +451,7 @@ mod Fs.FsLayer {
 
     pub def mkDir(d: String): Result[IoError, Unit] \ IO =
         try {
-            Files.createDirectory(Paths.get(d), (...{}: Vector[FileAttribute]));
+            Files.createDirectory(Paths.get(d));
             Ok(())
         } catch {
             case ex: InvalidPathException          => Err(IoError(ErrorKind.InvalidPath, ex.getMessage()))
@@ -460,7 +462,7 @@ mod Fs.FsLayer {
 
     pub def mkDirs(d: String): Result[IoError, Unit] \ IO =
         try {
-            Files.createDirectories(Paths.get(d), (...{}: Vector[FileAttribute]));
+            Files.createDirectories(Paths.get(d));
             Ok(())
         } catch {
             case ex: InvalidPathException          => Err(IoError(ErrorKind.InvalidPath, ex.getMessage()))
@@ -471,7 +473,7 @@ mod Fs.FsLayer {
 
     pub def mkTempDir(prefix: String): Result[IoError, String] \ IO =
         try {
-            let path = Files.createTempDirectory(prefix, (...{}: Vector[FileAttribute]));
+            let path = Files.createTempDirectory(prefix);
             Ok(path.toString())
         } catch {
             case ex: IllegalArgumentException      => Err(IoError(ErrorKind.InvalidPath, ex.getMessage()))
@@ -505,7 +507,7 @@ mod Fs.FsLayer {
         unsafe IO {
             let p = Paths.get(path).toAbsolutePath();
             try {
-                p.toRealPath((...{}: Vector[LinkOption]))
+                p.toRealPath()
             } catch {
                 case _: IOException =>
                     let parent = p.getParent();
@@ -513,7 +515,7 @@ mod Fs.FsLayer {
                         p.normalize()
                     else
                         try {
-                            parent.toRealPath((...{}: Vector[LinkOption])).resolve(p.getFileName())
+                            parent.toRealPath().resolve(p.getFileName())
                         } catch {
                             case _: IOException => p.normalize()
                         }
@@ -528,7 +530,7 @@ mod Fs.FsLayer {
     pub def resolveRealPath(path: String): Result[IoError, String] =
         unsafe IO {
             try {
-                Ok(Paths.get(path).toRealPath((...{}: Vector[LinkOption])).toString())
+                Ok(Paths.get(path).toRealPath().toString())
             } catch {
                 case ex: InvalidPathException => Err(IoError(ErrorKind.InvalidPath, ex.getMessage()))
                 case ex: NoSuchFileException  => Err(IoError(ErrorKind.NotFound, ex.getMessage()))
@@ -558,7 +560,7 @@ mod Fs.FsLayer {
     pub def chroot(chrootDir: String, path: String): Result[IoError, String] =
         unsafe IO {
             try {
-                let base = Paths.get(chrootDir).toRealPath((...{}: Vector[LinkOption]));
+                let base = Paths.get(chrootDir).toRealPath();
                 let resolved = resolveSymLink(Fs.FsLayer.resolve(chrootDir, path));
                 if (resolved.startsWith(base))
                     Ok(resolved.toString())
@@ -583,7 +585,7 @@ mod Fs.FsLayer {
                 let resolved = resolveSymLink(path);
                 let allowed = Nel.exists(
                     dir -> {
-                        let base = Paths.get(dir).toRealPath((...{}: Vector[LinkOption]));
+                        let base = Paths.get(dir).toRealPath();
                         resolved.startsWith(base)
                     },
                     allowedDirs
@@ -611,7 +613,7 @@ mod Fs.FsLayer {
                 let resolved = resolveSymLink(path);
                 let denied = Nel.exists(
                     dir -> {
-                        let base = Paths.get(dir).toRealPath((...{}: Vector[LinkOption]));
+                        let base = Paths.get(dir).toRealPath();
                         resolved.startsWith(base)
                     },
                     deniedDirs
