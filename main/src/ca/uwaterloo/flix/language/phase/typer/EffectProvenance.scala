@@ -53,16 +53,16 @@ object EffectProvenance {
 
 
     def addUnvisited(constraint: TypeConstraint)(implicit renv: RigidityEnv, scope: RegionScope): Env = constraint match {
-      case TypeConstraint.Equality(tpe1, tpe2, _) => val a = tpe1 match {
-        case Type.Var(sym, _) =>
-          if (!unvisited.contains(tpe1) && renv.isFlexible(sym)) this.copy(unvisited = tpe1 :: unvisited) else this
-        case _ => this
-      }
-        tpe2 match {
+      case TypeConstraint.Equality(tpe1, tpe2, _) =>
+        def deconstruct(t: Type, env: Env): Env = t match {
           case Type.Var(sym, _) =>
-            if (!unvisited.contains(tpe2) && renv.isFlexible(sym)) a.copy(unvisited = tpe2 :: a.unvisited) else a
-          case _ => a
+            if (!env.unvisited.contains(t) && renv.isFlexible(sym)) env.copy(unvisited = t :: env.unvisited) else env
+          case Type.Apply(lt, rt, _) => deconstruct(rt, deconstruct(lt, env))
+          case _ => env
         }
+
+        val e1 = deconstruct(tpe1, this)
+        deconstruct(tpe2, e1)
       case _ => this
     }
 
@@ -99,7 +99,8 @@ object EffectProvenance {
       }
       case _ => false
     }
-    Some(sovser.flatMap(a => emptyEnvWithSource(a).flatMap(doStuff(List(a), List.empty, constrs0, _))))
+    val res = sovser.flatMap(a => emptyEnvWithSource(a).flatMap(doStuff(List(a), List.empty, constrs0, _)))
+    if (res.isEmpty) None else Some(res)
   }
 
   private def doStuff(workList: List[TypeConstraint], unifiables: List[(ZhegalkinExpr[CofiniteIntSet], ZhegalkinExpr[CofiniteIntSet])], constr0: List[TypeConstraint], env: Env)(implicit renv: RigidityEnv, scope: RegionScope, alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]]): Option[EffConflicted] = {
@@ -113,6 +114,8 @@ object EffectProvenance {
       doStuff(newWorkList, a ::: unifiables, constr0, env2)
     } catch {
       case _: BoolUnificationException =>
+        println("Success!")
+        println(workList)
         mkError(workList.head, env.addLoc(workList.head))
     }
   }
@@ -120,7 +123,13 @@ object EffectProvenance {
 
   private def findType(tpe: Type, constr0: List[TypeConstraint]): List[TypeConstraint] = {
     constr0.filter {
-      case TypeConstraint.Equality(tpe1, tpe2, _) => tpe1 == tpe || tpe2 == tpe
+      case TypeConstraint.Equality(tpe1, tpe2, _) =>
+        def isTpe(t: Type): Boolean = t match {
+          case Type.Apply(lt, rt, _) => isTpe(lt) || isTpe(rt)
+          case _ => t == tpe
+        }
+
+        isTpe(tpe1) || isTpe(tpe2)
       case _ => false
     }
   }
@@ -139,7 +148,22 @@ object EffectProvenance {
     case TypeConstraint.Equality(_, _, prov) => prov match {
       case Provenance.ExpectEffect(expected, _, _) => expected match {
         case Type.Cst(tc, _) => tc match {
-          case TypeConstructor.Pure => Some(EffConflicted(TypeError.ExplicitlyPureFunctionUsesEffect(env.sourceEffect, env.locs.head._1, env.locs.last._3)))
+          case TypeConstructor.Pure =>
+            val isIO = env.sourceEffect match {
+              case Eff(symbol) => symbol match {
+                case Symbol.IO => true
+                case _ => false
+              }
+              case RigidVar(_) => false
+            }
+            val explicitImplicit: TypeError = (env.locs.head._1.isReal, isIO) match {
+              case (true, true) => TypeError.ExplicitlyPureFunctionUsesIO(env.locs.head._1, env.locs.last._3)
+              case (true, false) => TypeError.ExplicitlyPureFunctionUsesEffect(env.sourceEffect, env.locs.head._1, env.locs.last._3)
+              case (false, true) => TypeError.ImplicitlyPureFunctionUsesIO(env.locs.head._3, env.locs.last._3)
+              case (false, false) => TypeError.ImplicitlyPureFunctionUsesEffect(env.sourceEffect, env.locs.head._3, env.locs.last._3)
+            }
+            Some(EffConflicted(explicitImplicit))
+
           case TypeConstructor.Effect(_, _) => None
           case _ => None
         }
@@ -173,6 +197,13 @@ object EffectProvenance {
     tpe match {
       case Type.Var(sym, _) => Some(alg.mkVar(sym.id))
       case Type.Cst(tc, _) => Some(alg.mkCst(tc.hashCode()))
+      case Type.Apply(lt, rt, _) => (typeToZhegalkin(lt), typeToZhegalkin(rt)) match {
+        // Everything is Union :)
+        case (Some(x), Some(y)) => Some(alg.mkAnd(x, y))
+        case (Some(x), None) => Some(x)
+        case (None, Some(y)) => Some(y)
+        case (None, None) => None
+      }
       case _ => None
     }
   }
