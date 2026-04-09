@@ -15,8 +15,11 @@
  */
 package ca.uwaterloo.flix.language.phase.typer
 
-import ca.uwaterloo.flix.language.ast.shared.RegionScope
-import ca.uwaterloo.flix.language.ast.{RigidityEnv, SourceLocation, Type}
+import ca.uwaterloo.flix.language.ast.Symbol
+import ca.uwaterloo.flix.language.ast.shared.EffSymOrRigidVar.{Eff, RigidVar}
+import ca.uwaterloo.flix.language.ast.shared.{EffSymOrRigidVar, RegionScope}
+import ca.uwaterloo.flix.language.ast.{RigidityEnv, SourceLocation, Type, TypeConstructor}
+import ca.uwaterloo.flix.language.errors.TypeError
 import ca.uwaterloo.flix.language.phase.typer.TypeConstraint.{EffConflicted, Provenance}
 import ca.uwaterloo.flix.language.phase.unification.shared.{BoolAlg, BoolUnificationException, CofiniteIntSet, SveAlgorithm}
 import ca.uwaterloo.flix.language.phase.unification.zhegalkin.{ZhegalkinAlgebra, ZhegalkinExpr}
@@ -35,33 +38,42 @@ import scala.annotation.tailrec
   */
 object EffectProvenance {
 
-  case class Env(unvisited: List[Type], locs: List[SourceLocation]) {
+  case class Env(unvisited: List[Type], locs: List[(SourceLocation, SourceLocation, SourceLocation)], sourceEffect: EffSymOrRigidVar) {
+
 
     def addLoc(typeConstraint: TypeConstraint): Env = typeConstraint match {
-      case TypeConstraint.Equality(_, _, prov) => this.copy(locs = prov.loc :: locs)
+      case TypeConstraint.Equality(tpe1, tpe2, prov) => this.copy(locs = (tpe1.loc, tpe2.loc, prov.loc) :: locs)
       case _ => this
     }
 
     def popUnvisited: Env = unvisited match {
       case Nil => this
-      case _::xs => this.copy(unvisited = xs)
+      case _ :: xs => this.copy(unvisited = xs)
     }
 
 
     def addUnvisited(constraint: TypeConstraint)(implicit renv: RigidityEnv, scope: RegionScope): Env = constraint match {
       case TypeConstraint.Equality(tpe1, tpe2, _) => val a = tpe1 match {
         case Type.Var(sym, _) =>
-           if (!unvisited.contains(tpe1) && renv.isFlexible(sym)) this.copy(unvisited = tpe1 :: unvisited) else this
+          if (!unvisited.contains(tpe1) && renv.isFlexible(sym)) this.copy(unvisited = tpe1 :: unvisited) else this
         case _ => this
       }
-      tpe2 match {
-        case Type.Var(sym, _) =>
-          if (!unvisited.contains(tpe2) && renv.isFlexible(sym)) a.copy(unvisited = tpe2 :: a.unvisited) else a
-        case _ => a
-      }
+        tpe2 match {
+          case Type.Var(sym, _) =>
+            if (!unvisited.contains(tpe2) && renv.isFlexible(sym)) a.copy(unvisited = tpe2 :: a.unvisited) else a
+          case _ => a
+        }
       case _ => this
     }
 
+  }
+
+  private def emptyEnvWithSource(source: TypeConstraint): Option[Env] = source match {
+    case TypeConstraint.Equality(_, _, prov) => prov match {
+      case Provenance.Source(_, eff2, _) => typeToSym(eff2).map(Env(List.empty, List.empty, _))
+      case _ => None
+    }
+    case _ => None
   }
 
   /** Builds an effect conflict graph from given constraints. Then analyzes the
@@ -73,14 +85,13 @@ object EffectProvenance {
     * effect provenance analysis.
     *
     * @param constrs0
-    *   the list of type constraints to analyze
+    * the list of type constraints to analyze
     * @return
-    *   a list of conflicts if conflicts could be found, None otherwise
+    * a list of conflicts if conflicts could be found, None otherwise
     */
   def getErrors(constrs0: List[TypeConstraint])(implicit scope: RegionScope, renv: RigidityEnv): Option[List[EffConflicted]] = {
     implicit val alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]] = new ZhegalkinAlgebra[CofiniteIntSet](CofiniteIntSet.LatticeOps)
-    implicit val emptyEnv: Env = Env(List.empty, List.empty)
-    var workList: List[(ZhegalkinExpr[CofiniteIntSet], ZhegalkinExpr[CofiniteIntSet])] = Nil
+    if (isDebug(constrs0)) return None
     val sovser = constrs0.filter {
       case TypeConstraint.Equality(_, _, prov) => prov match {
         case Provenance.Source(_, _, _) => true
@@ -88,21 +99,21 @@ object EffectProvenance {
       }
       case _ => false
     }
-    sovser.foreach(a => doStuff(Set(a), List.empty, constrs0, emptyEnv))
-    None
+    Some(sovser.flatMap(a => emptyEnvWithSource(a).flatMap(doStuff(List(a), List.empty, constrs0, _))))
   }
 
-  private def doStuff(workList: Set[TypeConstraint], unifiables: List[(ZhegalkinExpr[CofiniteIntSet], ZhegalkinExpr[CofiniteIntSet])], constr0 : List[TypeConstraint], env: Env)(implicit renv: RigidityEnv, scope: RegionScope, alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]]): Unit = {
+  private def doStuff(workList: List[TypeConstraint], unifiables: List[(ZhegalkinExpr[CofiniteIntSet], ZhegalkinExpr[CofiniteIntSet])], constr0: List[TypeConstraint], env: Env)(implicit renv: RigidityEnv, scope: RegionScope, alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]]): Option[EffConflicted] = {
     val env1 = env.popUnvisited
-    val a = workList.flatMap(constraintToZhegalkin).toList
+    val a = workList.flatMap(constraintToZhegalkin)
     try {
-      SveAlgorithm.sveAll(a.toList)
+      SveAlgorithm.sveAll(a)
       val env2 = workList.foldLeft(env1)((acc, x) => acc.addUnvisited(x).addLoc(x))
-      val b = env2.unvisited.toSet.flatMap(findType(_, constr0))
-      doStuff(workList ++ b, a ::: unifiables, constr0, env2)
+      val b = env2.unvisited.flatMap(findType(_, constr0))
+      val newWorkList = b.foldLeft(workList)((acc, x) => if (acc.contains(x)) acc else x :: acc)
+      doStuff(newWorkList, a ::: unifiables, constr0, env2)
     } catch {
       case _: BoolUnificationException =>
-        println(env.locs)
+        mkError(workList.head, env.addLoc(workList.head))
     }
   }
 
@@ -124,7 +135,38 @@ object EffectProvenance {
     case _ => None
   }
 
+  private def mkError(breakPoint: TypeConstraint, env: Env): Option[EffConflicted] = breakPoint match {
+    case TypeConstraint.Equality(_, _, prov) => prov match {
+      case Provenance.ExpectEffect(expected, _, _) => expected match {
+        case Type.Cst(tc, _) => tc match {
+          case TypeConstructor.Pure => Some(EffConflicted(TypeError.ExplicitlyPureFunctionUsesEffect(env.sourceEffect, env.locs.head._1, env.locs.last._3)))
+          case TypeConstructor.Effect(_, _) => None
+          case _ => None
+        }
+        case _ => None
+      }
+      case _ => None
+    }
+    case _ => None
+  }
 
+  private def isDebug(constrs: List[TypeConstraint]): Boolean = {
+    constrs.exists {
+      case TypeConstraint.Equality(tpe1, tpe2, _) =>
+        val isDb = (t: Type) => t match {
+          case Type.Cst(tc, _) => tc match {
+            case TypeConstructor.Effect(sym, _) => sym match {
+              case Symbol.Debug => true
+              case _ => false
+            }
+            case _ => false
+          }
+          case _ => false
+        }
+        isDb(tpe1) || isDb(tpe2)
+      case _ => false
+    }
+  }
 
 
   private def typeToZhegalkin(tpe: Type)(implicit alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]]): Option[ZhegalkinExpr[CofiniteIntSet]] = {
@@ -134,4 +176,15 @@ object EffectProvenance {
       case _ => None
     }
   }
+
+  private def typeToSym(tpe: Type): Option[EffSymOrRigidVar] = tpe match {
+    case Type.Var(sym, _) => Some(RigidVar(sym))
+    case Type.Cst(tc, _) => tc match {
+      case TypeConstructor.Pure => Some(Eff(Symbol.mkEffSym("Pure")))
+      case TypeConstructor.Effect(sym, _) => Some(Eff(sym))
+      case _ => None
+    }
+    case _ => None
+  }
 }
+
