@@ -75,10 +75,9 @@ object EffectProvenance {
     @tailrec
     def doStuffHelper(prev: TypeConstraint, unvisited: List[TypeConstraint], workQueue: Queue[TypeConstraint], sub: BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]], m: Map[Type, Int])(implicit alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]], scope: RegionScope, renv: RigidityEnv): Option[EffConflicted] = {
       val (workQueue2, unvisited2) = findNext(prev, unvisited, workQueue)
+      println(workQueue2)
       val (x, q) = workQueue2.dequeue
-      println(sub)
       val (newSub, newMap) = applySubs(x, sub, m)
-      println(newSub)
       newSub match {
         case Some(ns) => doStuffHelper(x, unvisited2, q, ns, newMap)
         case None => mkError(initial, x)
@@ -96,21 +95,23 @@ object EffectProvenance {
       }
       case _ => None
     }
-    a.flatMap(typeToSym).flatMap(sourceSym =>
+    a.flatMap(sourceTpe => {
+
+      val sourceSyms = typeToSym(sourceTpe)
       sink match {
         case TypeConstraint.Equality(_, _, prov) => prov match {
           case Provenance.ExpectEffect(expected, _, _) => expected match {
             case Type.Cst(tc, loc) => tc match {
               case TypeConstructor.Pure =>
-                val isIO = sourceSym match {
-                  case Eff(symbol) => symbol == Symbol.IO
-                  case RigidVar(_) => false
+                val isIO = sourceSyms match {
+                  case Eff(symbol) :: Nil => symbol == Symbol.IO
+                  case _ => false
                 }
                 val err: TypeError = (loc.isReal, isIO) match {
                   case (true, true) => TypeError.ExplicitlyPureFunctionUsesIO(loc, source.loc)
-                  case (true, false) => TypeError.ExplicitlyPureFunctionUsesEffect(sourceSym, loc, source.loc)
+                  case (true, false) => TypeError.ExplicitlyPureFunctionUsesEffect(sourceSyms.head, loc, source.loc)
                   case (false, true) => TypeError.ImplicitlyPureFunctionUsesIO(prov.loc, source.loc)
-                  case (false, false) => TypeError.ImplicitlyPureFunctionUsesEffect(sourceSym, prov.loc, source.loc)
+                  case (false, false) => TypeError.ImplicitlyPureFunctionUsesEffect(sourceSyms.head, prov.loc, source.loc)
                 }
                 Some(EffConflicted(err))
               case _ => None
@@ -120,7 +121,7 @@ object EffectProvenance {
           case _ => None
         }
         case _ => None
-    })
+    }})
   }
 
   private def applySubs(current: TypeConstraint, sub: BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]], idMap: Map[Type, Int])(implicit alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]], scope: RegionScope, renv: RigidityEnv): (Option[BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]]], Map[Type, Int]) = {
@@ -191,7 +192,7 @@ object EffectProvenance {
   private def isDebug(constrs: List[TypeConstraint]): Boolean = {
     constrs.exists {
       case TypeConstraint.Equality(tpe1, tpe2, _) =>
-        val isDb = (t: Type) => t match {
+        def isDb(t: Type): Boolean = t match {
           case Type.Cst(tc, _) => tc match {
             case TypeConstructor.Effect(sym, _) => sym match {
               case Symbol.Debug => true
@@ -199,6 +200,7 @@ object EffectProvenance {
             }
             case _ => false
           }
+          case Type.Apply(tl, tr, _) => isDb(tl) || isDb(tr)
           case _ => false
         }
         isDb(tpe1) || isDb(tpe2)
@@ -229,19 +231,33 @@ object EffectProvenance {
           a(cstId, alg.mkCst)
         }
       case Type.Cst(_, _) => a(cstId, alg.mkCst)
+      case Type.Apply(tl, tr, _) => tpe.baseType match {
+        case Type.Cst(tc, _) => tc match {
+          case TypeConstructor.Union => typeToZhegalkin(tl, idMap) match {
+            case (Some(zhL), nm) => typeToZhegalkin(tr, nm) match {
+              case (Some(zhR), nnm) => (Some(alg.mkOr(zhL, zhR)), nnm)
+              case (None, nnm) => (None, nnm)
+            }
+            case (None, nm) => (None, nm)
+          }
+          case _ => (None, idMap)
+        }
+        case _ => (None, idMap)
+      }
       case _ => (None, idMap)
     }
   }
 
 
-  private def typeToSym(tpe: Type): Option[EffSymOrRigidVar] = tpe match {
-    case Type.Var(sym, _) => Some(RigidVar(sym))
+  private def typeToSym(tpe: Type): List[EffSymOrRigidVar] = tpe match {
+    case Type.Var(sym, _) => List(RigidVar(sym))
     case Type.Cst(tc, _) => tc match {
-      case TypeConstructor.Pure => Some(Eff(Symbol.mkEffSym("Pure")))
-      case TypeConstructor.Effect(sym, _) => Some(Eff(sym))
-      case _ => None
+      case TypeConstructor.Pure => List(Eff(Symbol.mkEffSym("Pure")))
+      case TypeConstructor.Effect(sym, _) => List(Eff(sym))
+      case _ => Nil
     }
-    case _ => None
+    case Type.Apply(tl, tr, _) => typeToSym(tl) ++ typeToSym(tr)
+    case _ => Nil
   }
 }
 
