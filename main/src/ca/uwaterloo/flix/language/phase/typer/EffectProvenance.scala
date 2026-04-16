@@ -99,15 +99,15 @@ object EffectProvenance {
   private def mkErrors(source: TypeConstraint, sink: TypeConstraint): List[EffConflicted] = {
     val a = source match {
       case TypeConstraint.Equality(t1, t2, prov) => prov match {
-        case Provenance.Source(_, _, _) => Some(t2)
-        case Provenance.ExpectType(_, _, _) => Some(t2)
-        case Provenance.Match(_, _, _) => Some(t2)
-        case Provenance.ExpectEffect(_, _, _) => Some(t1)
+        case Provenance.Source(_, _, _) => Some((t2, prov))
+        case Provenance.ExpectType(_, _, _) => Some((t2, prov))
+        case Provenance.Match(_, _, _) => Some((t2, prov))
+        case Provenance.ExpectEffect(_, _, _) => Some((t1, prov))
         case _ => None
       }
       case _ => None
     }
-    a.map(sourceTpe => {
+    a.map( { case (sourceTpe, sProv) =>
 
       val sourceSyms = typeToSym(sourceTpe)
       sink match {
@@ -144,8 +144,10 @@ object EffectProvenance {
               nid ::: u
             case _ => Nil
           }
-          case Provenance.ExpectArgument(expected, _, sym1, _, loc) =>
-            List(EffConflicted(TypeError.ArgumentGivenWrongEffect(typeToSym(expected), sourceSyms, sym1.loc, sink.loc, loc)))
+          case Provenance.ExpectArgument(expected, _, sym, _, _) => sym match {
+            case ds: Symbol.DefnSym => List(EffConflicted(TypeError.ArgumentGivenWrongEffect(typeToSym(expected), sourceSyms,  sink.loc, ds.loc, sProv.loc)))
+            case _ => Nil
+          }
           case _ => Nil
         }
         case _ => Nil
