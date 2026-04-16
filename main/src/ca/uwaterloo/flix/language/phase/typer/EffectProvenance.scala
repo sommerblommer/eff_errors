@@ -57,15 +57,15 @@ object EffectProvenance {
   def getErrors(constrs0: List[TypeConstraint])(implicit scope: RegionScope, renv: RigidityEnv): Option[List[EffConflicted]] = {
     implicit val alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]] = new ZhegalkinAlgebra[CofiniteIntSet](CofiniteIntSet.LatticeOps)
     if (isDebug(constrs0)) return None
-    val (sinks, rest) = constrs0.partition {
+    val (sources, rest) = constrs0.partition {
       case TypeConstraint.Equality(_, _, prov) => prov match {
-        case Provenance.ExpectEffect(_, _, _) => true
-        case Provenance.ExpectArgument(_ ,_, _, _, _) => true
+        case Provenance.Source(_, eff2, _) => !isFlexible(eff2)
+        case Provenance.ExpectType(_, _, _) => true
         case _ => false
       }
       case _ => false
     }
-    val res = sinks.map(a => (a, initialSub(a, Map.empty))
+    val res = sources.map(a => (a, initialSub(a, Map.empty))
     ).flatMap {
       case (c, (Left(ze), m)) => doStuff(c, rest, ze, m)
       case (_, (Right(err), _)) => err
@@ -74,19 +74,16 @@ object EffectProvenance {
     if (res.isEmpty) None else Some(res)
   }
 
+
   private def doStuff(initial: TypeConstraint, constrs0: List[TypeConstraint], initialSub: BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]], idMap: Map[Type, Int])(implicit alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]], scope: RegionScope, renv: RigidityEnv): List[EffConflicted] = {
     def doStuffHelper(visited: List[TypeConstraint], unvisited: List[TypeConstraint], workQueue: Queue[TypeConstraint], sub: BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]], m: Map[Type, Int])(implicit alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]], scope: RegionScope, renv: RigidityEnv): List[EffConflicted] = {
       val (workQueue2, unvisited2) = findNext(visited, unvisited, workQueue, idMap)
-      // println(f"visited ${visited}")
-      // println(f"unvisited ${unvisited}")
-      // println(f"workQueue2 ${workQueue2}")
       try {
         val (x, q) = workQueue2.dequeue
         val (newSub, newMap) = applySubs(x, sub, m)
         newSub match {
           case Some(ns) => doStuffHelper(x :: visited, unvisited2, q, ns, newMap)
-          case None => println("success")
-            mkErrors(x, initial)
+          case None => println("success"); mkErrors(initial, x)
         }
       } catch {
         case _: NoSuchElementException => println("død"); Nil
@@ -107,7 +104,7 @@ object EffectProvenance {
       }
       case _ => None
     }
-    a.map( { case (sourceTpe, sProv) =>
+    a.map({ case (sourceTpe, sProv) =>
 
       val sourceSyms = typeToSym(sourceTpe)
       sink match {
@@ -129,7 +126,7 @@ object EffectProvenance {
                 List(EffConflicted(err))
               case TypeConstructor.Effect(sym, _) => sourceTpe match {
                 case Type.Cst(tc2, _) => tc2 match {
-                  case TypeConstructor.Pure => List(EffConflicted(TypeError.UnusedEffectInSignature(Eff(sym), loc)))
+                  case TypeConstructor.Pure => Nil
                   case _ => List(EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(List(Eff(sym)), sourceSyms.head, loc, source.loc)))
                 }
                 case _ => List(EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(List(Eff(sym)), sourceSyms.head, loc, source.loc)))
@@ -137,30 +134,34 @@ object EffectProvenance {
               case _ => Nil
             }
             case Type.Apply(_, _, _) =>
-              val unused = findDiffInTypes(expected, sourceTpe)
-              val u = unused.map(x => EffConflicted(TypeError.UnusedEffectInSignature(typeToSym(x).head, x.loc)))
               val notInDef = findDiffInTypes(sourceTpe, expected)
-              val nid = notInDef.map(x => EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(typeToSym(expected), sourceSyms.head, expected.loc, source.loc)))
-              nid ::: u
+              notInDef.map(x => EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(typeToSym(expected), typeToSym(x).head, expected.loc, source.loc)))
             case _ => Nil
           }
           case Provenance.ExpectArgument(expected, _, sym, _, _) => sym match {
-            case ds: Symbol.DefnSym => List(EffConflicted(TypeError.ArgumentGivenWrongEffect(typeToSym(expected), sourceSyms,  sink.loc, ds.loc, sProv.loc)))
+            case ds: Symbol.DefnSym => List(EffConflicted(TypeError.ArgumentGivenWrongEffect(typeToSym(expected), sourceSyms, sink.loc, ds.loc, sProv.loc)))
             case _ => Nil
           }
           case _ => Nil
         }
         case _ => Nil
-    }}).getOrElse(Nil)
+      }
+    }).getOrElse(Nil)
+
+
+  }
+
+
+  private def consTypeArgs(t: Type): List[Type] = {
+    val cons = (x: Type) => x :: Nil
+    val concat = (x: List[Type], y: List[Type]) => x ::: y
+    deconstructType(t, cons, concat, Nil)
   }
 
   private def findDiffInTypes(tpe1: Type, tpe2: Type): List[Type] = {
-    val cons = (x: Type) => x :: Nil
-    val concat = (x: List[Type], y: List[Type]) => x ::: y
-    val x = deconstructType(tpe1, cons, concat, Nil)
-    val y = deconstructType(tpe2, cons, concat, Nil)
-    val resx = x.diff(y)
-    resx
+    val x = consTypeArgs(tpe1)
+    val y = consTypeArgs(tpe2)
+    x.diff(y)
   }
 
   private def applySubs(current: TypeConstraint, sub: BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]], idMap: Map[Type, Int])(implicit alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]], scope: RegionScope, renv: RigidityEnv): (Option[BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]]], Map[Type, Int]) = {
@@ -197,7 +198,7 @@ object EffectProvenance {
   }
 
   private def findNext(visited: List[TypeConstraint], unvisited: List[TypeConstraint], workQueue: Queue[TypeConstraint], idMap: Map[Type, Int]): (Queue[TypeConstraint], List[TypeConstraint]) = {
-    visited.foldLeft ((workQueue, unvisited)) {
+    visited.foldLeft((workQueue, unvisited)) {
       case ((wq, unvis), TypeConstraint.Equality(tpe1, tpe2, _)) =>
         // only include variables
         val f = (t: Type) => if (idMap.getOrElse(t, -1) < 0) findType(t, unvis) else Nil
@@ -217,6 +218,7 @@ object EffectProvenance {
           case Type.Apply(_, _, _) => t.typeArguments.exists(isTpe(_, t2))
           case _ => t == t2
         }
+
         val a = (x: Boolean, y: Boolean) => x || y
         deconstructType(tpe, isTpe(tpe1, _), a, false) || deconstructType(tpe, isTpe(tpe2, _), a, false)
       case _ => false
@@ -225,9 +227,9 @@ object EffectProvenance {
 
   /**
     *
-    * @param t Type
-    * @param f the function to apply to the type
-    * @param g the function to apply in case of a Type.Apply
+    * @param t       Type
+    * @param f       the function to apply to the type
+    * @param g       the function to apply in case of a Type.Apply
     * @param default default value to return when fail
     */
   private def deconstructType[A](t: Type, f: Type => A, g: (A, A) => A, default: A): A = t match {
@@ -269,6 +271,7 @@ object EffectProvenance {
           case Type.Apply(tl, tr, _) => isDb(tl) || isDb(tr)
           case _ => false
         }
+
         isDb(tpe1) || isDb(tpe2)
       case _ => false
     }
@@ -277,7 +280,8 @@ object EffectProvenance {
 
   /**
     * convert a Type into a Zhegalkin expression and update the idMap if necessary
-    * @param tpe Type to convert
+    *
+    * @param tpe   Type to convert
     * @param idMap map containing ids of converted types
     * @return a tuple of Option[ZhegalkinExpr] and idMap, so an idMap is always returned
     */
@@ -307,7 +311,7 @@ object EffectProvenance {
               }
             }
 
-            (Some(zhList.foldLeft(alg.mkBot) ((acc, x) => alg.mkOr(acc, x))), newMap)
+            (Some(zhList.foldLeft(alg.mkBot)((acc, x) => alg.mkOr(acc, x))), newMap)
           case _ => (None, idMap)
         }
         case _ => (None, idMap)
@@ -316,6 +320,10 @@ object EffectProvenance {
     }
   }
 
+  private def isFlexible(tpe: Type)(implicit scope: RegionScope, renv: RigidityEnv): Boolean = tpe match {
+    case Type.Var(sym, _) => renv.isFlexible(sym)
+    case _ => false
+  }
 
   private def typeToSym(tpe: Type): List[EffSymOrRigidVar] = tpe match {
     case Type.Var(sym, _) => List(RigidVar(sym))
