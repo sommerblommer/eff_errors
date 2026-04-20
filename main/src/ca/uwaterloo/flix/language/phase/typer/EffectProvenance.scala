@@ -59,7 +59,7 @@ object EffectProvenance {
     if (isDebug(constrs0)) return None
     val (sources, rest) = constrs0.partition {
       case TypeConstraint.Equality(_, _, prov) => prov match {
-        case Provenance.Source(_, eff2, _) => !isFlexible(eff2)
+        case Provenance.Source(_, eff2, _) => !isFlexible(eff2) && !isPure(eff2)
         case Provenance.ExpectType(_, _, _) => true
         case _ => false
       }
@@ -82,8 +82,13 @@ object EffectProvenance {
       case (_, (Right(err), _)) => err
       case _ => None
     }
+    // test if all constraints are be solved by themselves
+    val singles = constrs0.filterNot(pureSource).flatMap(initialSub(_, Map.empty) match {
+      case (Right(effErr), _) => Some(effErr)
+      case (Left(_), _) => None
+    }).flatten
     val unused = s.map(x => EffConflicted(TypeError.UnusedEffectInSignature(typeToSym(x).head, x.loc))).toList
-    val r = unused ++ res
+    val r = unused ++ res ++ singles
     if (r.isEmpty) None else Some(r)
   }
 
@@ -95,17 +100,29 @@ object EffectProvenance {
     case _ => false
   }
 
+  private def isSink(constr: TypeConstraint): Boolean = constr match {
+    case TypeConstraint.Equality(_, _, prov) => prov match {
+      case Provenance.ExpectEffect(_, _, _) => true
+      case _ => false
+    }
+    case _ => false
+  }
+
 
   private def doStuff(initial: TypeConstraint, constrs0: List[TypeConstraint], initialSub: BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]], idMap: Map[Type, Int], unused: Set[Type])(implicit alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]], scope: RegionScope, renv: RigidityEnv): (List[EffConflicted], Set[Type]) = {
     var s = unused
-
+    s = initial match {
+      case TypeConstraint.Equality(_, tpe2, _) =>
+        s.diff(consTypeArgs(tpe2).toSet)
+      case _ => s
+    }
     def doStuffHelper(visited: List[TypeConstraint], unvisited: List[TypeConstraint], workQueue: Queue[TypeConstraint], sub: BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]], m: Map[Type, Int])(implicit alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]], scope: RegionScope, renv: RigidityEnv): List[EffConflicted] = {
       val (workQueue2, unvisited2) = findNext(visited, unvisited, workQueue, idMap)
       try {
         val (x, q) = workQueue2.dequeue
         val (newSub, newMap) = applySubs(x, sub, m)
         newSub match {
-          case Some(ns) => doStuffHelper(x :: visited, unvisited2, q, ns, newMap)
+          case Some(ns) => if (isSink(visited.head)) Nil else doStuffHelper(x :: visited, unvisited2, q, ns, newMap)
           case None =>
             println("success")
             val (errs, nu) = mkErrors(initial, x, s)
@@ -113,13 +130,7 @@ object EffectProvenance {
             errs
         }
       } catch {
-        case _:
-          NoSuchElementException => println("død")
-          s = initial match {
-            case TypeConstraint.Equality(_, tpe2, _) => s.diff(consTypeArgs(tpe2).toSet)
-            case _ => s
-          }
-          Nil
+        case _: NoSuchElementException => println("død"); Nil
       }
     }
 
@@ -130,6 +141,7 @@ object EffectProvenance {
     var s: Set[Type] = sinks
     val a = source match {
       case TypeConstraint.Equality(t1, t2, prov) => prov match {
+        case Provenance.ExpectArgument(_, _, _, _, _) => Some((t2, prov))
         case Provenance.Source(_, _, _) => Some((t2, prov))
         case Provenance.ExpectType(_, _, _) => Some((t2, prov))
         case Provenance.Match(_, _, _) => Some((t2, prov))
@@ -361,6 +373,11 @@ object EffectProvenance {
 
   private def isFlexible(tpe: Type)(implicit scope: RegionScope, renv: RigidityEnv): Boolean = tpe match {
     case Type.Var(sym, _) => renv.isFlexible(sym)
+    case _ => false
+  }
+
+  private def pureSource(typeConstraint: TypeConstraint) = typeConstraint match {
+    case TypeConstraint.Equality(_, tpe2, _) => isPure(tpe2)
     case _ => false
   }
 
