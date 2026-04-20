@@ -65,17 +65,40 @@ object EffectProvenance {
       }
       case _ => false
     }
+    var s = rest.foldLeft(Set.empty[Type]) {
+      case (acc, TypeConstraint.Equality(_, _, prov)) => prov match {
+        case Provenance.ExpectType(expected, _, _) => if (!isPure(expected)) acc ++ consTypeArgs(expected) else acc
+        case Provenance.ExpectEffect(expected, _, _) => if (!isPure(expected)) acc ++ consTypeArgs(expected) else acc
+        case _ => acc
+      }
+      case (acc, _) => acc
+    }
     val res = sources.map(a => (a, initialSub(a, Map.empty))
     ).flatMap {
-      case (c, (Left(ze), m)) => doStuff(c, rest, ze, m)
+      case (c, (Left(ze), m)) =>
+        val (errs, unused) = doStuff(c, rest, ze, m, s)
+        s = unused
+        errs
       case (_, (Right(err), _)) => err
       case _ => None
     }
-    if (res.isEmpty) None else Some(res)
+    val unused = s.map(x => EffConflicted(TypeError.UnusedEffectInSignature(typeToSym(x).head, x.loc))).toList
+    val r = unused ++ res
+    if (r.isEmpty) None else Some(r)
+  }
+
+  private def isPure(tpe: Type): Boolean = tpe match {
+    case Type.Cst(tc, _) => tc match {
+      case TypeConstructor.Pure => true
+      case _ => false
+    }
+    case _ => false
   }
 
 
-  private def doStuff(initial: TypeConstraint, constrs0: List[TypeConstraint], initialSub: BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]], idMap: Map[Type, Int])(implicit alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]], scope: RegionScope, renv: RigidityEnv): List[EffConflicted] = {
+  private def doStuff(initial: TypeConstraint, constrs0: List[TypeConstraint], initialSub: BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]], idMap: Map[Type, Int], unused: Set[Type])(implicit alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]], scope: RegionScope, renv: RigidityEnv): (List[EffConflicted], Set[Type]) = {
+    var s = unused
+
     def doStuffHelper(visited: List[TypeConstraint], unvisited: List[TypeConstraint], workQueue: Queue[TypeConstraint], sub: BoolSubstitution[ZhegalkinExpr[CofiniteIntSet]], m: Map[Type, Int])(implicit alg: BoolAlg[ZhegalkinExpr[CofiniteIntSet]], scope: RegionScope, renv: RigidityEnv): List[EffConflicted] = {
       val (workQueue2, unvisited2) = findNext(visited, unvisited, workQueue, idMap)
       try {
@@ -83,17 +106,28 @@ object EffectProvenance {
         val (newSub, newMap) = applySubs(x, sub, m)
         newSub match {
           case Some(ns) => doStuffHelper(x :: visited, unvisited2, q, ns, newMap)
-          case None => println("success"); mkErrors(initial, x)
+          case None =>
+            println("success")
+            val (errs, nu) = mkErrors(initial, x, s)
+            s = nu
+            errs
         }
       } catch {
-        case _: NoSuchElementException => println("død"); Nil
+        case _:
+          NoSuchElementException => println("død")
+          s = initial match {
+            case TypeConstraint.Equality(_, tpe2, _) => s.diff(consTypeArgs(tpe2).toSet)
+            case _ => s
+          }
+          Nil
       }
     }
 
-    doStuffHelper(List(initial), constrs0, Queue.empty, initialSub, idMap)
+    (doStuffHelper(List(initial), constrs0, Queue.empty, initialSub, idMap), s)
   }
 
-  private def mkErrors(source: TypeConstraint, sink: TypeConstraint): List[EffConflicted] = {
+  private def mkErrors(source: TypeConstraint, sink: TypeConstraint, sinks: Set[Type]): (List[EffConflicted], Set[Type]) = {
+    var s: Set[Type] = sinks
     val a = source match {
       case TypeConstraint.Equality(t1, t2, prov) => prov match {
         case Provenance.Source(_, _, _) => Some((t2, prov))
@@ -104,51 +138,56 @@ object EffectProvenance {
       }
       case _ => None
     }
-    a.map({ case (sourceTpe, sProv) =>
+    val b = a.map({ case (sourceTpe, sProv) =>
 
       val sourceSyms = typeToSym(sourceTpe)
       sink match {
-        case TypeConstraint.Equality(_, _, prov) => prov match {
-          case Provenance.ExpectEffect(expected, _, _) => expected match {
-            case Type.Var(sym, _) => List(EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(List(RigidVar(sym)), sourceSyms.head, expected.loc, source.loc)))
-            case Type.Cst(tc, loc) => tc match {
-              case TypeConstructor.Pure =>
-                val isIO = sourceSyms match {
-                  case Eff(symbol) :: Nil => symbol == Symbol.IO
-                  case _ => false
+        case TypeConstraint.Equality(tpe1, _, prov) =>
+          s = s.diff(consTypeArgs(sourceTpe).toSet)
+          if (tpe1 == sourceTpe) Nil else {
+            val errs = prov match {
+              case Provenance.ExpectEffect(expected, _, _) => expected match {
+                case Type.Var(sym, _) => List(EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(List(RigidVar(sym)), sourceSyms.head, expected.loc, source.loc)))
+                case Type.Cst(tc, loc) => tc match {
+                  case TypeConstructor.Pure =>
+                    val isIO = sourceSyms match {
+                      case Eff(symbol) :: Nil => symbol == Symbol.IO
+                      case _ => false
+                    }
+                    val err: TypeError = (loc.isReal, isIO) match {
+                      case (true, true) => TypeError.ExplicitlyPureFunctionUsesIO(loc, source.loc)
+                      case (true, false) => TypeError.ExplicitlyPureFunctionUsesEffect(sourceSyms.head, loc, source.loc)
+                      case (false, true) => TypeError.ImplicitlyPureFunctionUsesIO(prov.loc, source.loc)
+                      case (false, false) => TypeError.ImplicitlyPureFunctionUsesEffect(sourceSyms.head, prov.loc, source.loc)
+                    }
+                    List(EffConflicted(err))
+                  case TypeConstructor.Effect(sym, _) => sourceTpe match {
+                    case Type.Cst(tc2, _) => tc2 match {
+                      case TypeConstructor.Pure => Nil
+                      case _ => List(EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(List(Eff(sym)), sourceSyms.head, loc, source.loc)))
+                    }
+                    case _ => List(EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(List(Eff(sym)), sourceSyms.head, loc, source.loc)))
+                  }
+                  case _ => Nil
                 }
-                val err: TypeError = (loc.isReal, isIO) match {
-                  case (true, true) => TypeError.ExplicitlyPureFunctionUsesIO(loc, source.loc)
-                  case (true, false) => TypeError.ExplicitlyPureFunctionUsesEffect(sourceSyms.head, loc, source.loc)
-                  case (false, true) => TypeError.ImplicitlyPureFunctionUsesIO(prov.loc, source.loc)
-                  case (false, false) => TypeError.ImplicitlyPureFunctionUsesEffect(sourceSyms.head, prov.loc, source.loc)
-                }
-                List(EffConflicted(err))
-              case TypeConstructor.Effect(sym, _) => sourceTpe match {
-                case Type.Cst(tc2, _) => tc2 match {
-                  case TypeConstructor.Pure => Nil
-                  case _ => List(EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(List(Eff(sym)), sourceSyms.head, loc, source.loc)))
-                }
-                case _ => List(EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(List(Eff(sym)), sourceSyms.head, loc, source.loc)))
+                case Type.Apply(_, _, _) =>
+                  val notInDef = findDiffInTypes(sourceTpe, expected)
+                  notInDef.map(x => EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(typeToSym(expected), typeToSym(x).head, expected.loc, source.loc)))
+                case _ => Nil
+              }
+              case Provenance.ExpectArgument(expected, _, sym, _, _) => sym match {
+                case ds: Symbol.DefnSym => List(EffConflicted(TypeError.ArgumentGivenWrongEffect(typeToSym(expected), sourceSyms, sink.loc, ds.loc, sProv.loc)))
+                case _ => Nil
               }
               case _ => Nil
             }
-            case Type.Apply(_, _, _) =>
-              val notInDef = findDiffInTypes(sourceTpe, expected)
-              notInDef.map(x => EffConflicted(TypeError.EffectfulFunctionUsesOtherEffect(typeToSym(expected), typeToSym(x).head, expected.loc, source.loc)))
-            case _ => Nil
+            errs
           }
-          case Provenance.ExpectArgument(expected, _, sym, _, _) => sym match {
-            case ds: Symbol.DefnSym => List(EffConflicted(TypeError.ArgumentGivenWrongEffect(typeToSym(expected), sourceSyms, sink.loc, ds.loc, sProv.loc)))
-            case _ => Nil
-          }
-          case _ => Nil
-        }
         case _ => Nil
       }
+
     }).getOrElse(Nil)
-
-
+    (b, s)
   }
 
 
@@ -189,7 +228,7 @@ object EffectProvenance {
             case TypeConstraint.Equality(tpe1, tpe2, prov) =>
               val newSource = TypeConstraint.Equality(tpe2, tpe2, prov)
               val newSink = TypeConstraint.Equality(tpe1, tpe1, prov)
-              (Right(mkErrors(newSource, newSink)), nm)
+              (Right(mkErrors(newSource, newSink, Set.empty[Type])._1), nm)
             case _ => (Right(Nil), nm)
           }
         }
