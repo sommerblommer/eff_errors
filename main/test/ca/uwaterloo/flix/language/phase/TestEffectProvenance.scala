@@ -401,6 +401,31 @@ class TestEffectProvenance extends AnyFunSuite with TestUtils {
     expectOneError[TypeError.EffectfulFunctionUsesOtherEffect](result)
   }
 
+  test("Test.EffectfulFunctionUsesOtherEffect.09") {
+    val input =
+      """
+        |eff Foo {
+        |    def f(): Unit
+        |}
+        |eff Baz {
+        |    def b(): Unit
+        |}
+        |
+        |def bar(): Unit \ Foo + Baz = Baz.b(); Foo.f()
+        |
+        |def main(): Unit \ IO =
+        |    run {
+        |        bar()
+        |    } with handler Foo {
+        |        def f(k) = {
+        |            k()
+        |        }
+        |    }; println("€")
+        """.stripMargin
+    val result = check(input, Options.TestWithLibMin)
+    expectOneError[TypeError.EffectfulFunctionUsesOtherEffect](result)
+  }
+
   test("Test.UnusedEffectInSignature.01") {
     val input =
       """
